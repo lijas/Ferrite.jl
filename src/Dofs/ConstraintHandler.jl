@@ -734,14 +734,14 @@ function _condense!(K::SparseMatrixCSC, f::AbstractVector, dofcoefficients::Vect
                 end
             end
 
-            #f condense_f
-            #    dofcoef = dofcoefficients[dcol]
-            #    for (d,v) in dofcoef
-            #        f[d] += f[col] * v
-            #    end
-            #    @assert ac.constrained_dof == col
-            #    f[ac.constrained_dof] = 0.0
-            #end
+            if condense_f
+                dofcoef = dofcoefficients[dcol]
+                dofcoef === nothing && continue
+                for (d,v) in dofcoef
+                    f[d] += f[col] * v
+                end
+                #f[col] = 0.0
+            end
         end
     end
 end
