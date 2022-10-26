@@ -81,12 +81,11 @@ struct ConstraintHandler{DH<:AbstractDofHandler,T}
     bcvalues::Vector{BCValues{T}}
     dh::DH
     closed::ScalarWrapper{Bool}
-    has_affine::ScalarWrapper{Bool}
 end
 
 function ConstraintHandler(dh::AbstractDofHandler)
     @assert isclosed(dh)
-    ConstraintHandler(Dirichlet[], Int[], Int[], Float64[], Union{Nothing,DofCoefficients{Float64}}[], Dict{Int,Int}(), BCValues{Float64}[], dh, ScalarWrapper(false), ScalarWrapper(false))
+    ConstraintHandler(Dirichlet[], Int[], Int[], Float64[], Union{Nothing,DofCoefficients{Float64}}[], Dict{Int,Int}(), BCValues{Float64}[], dh, ScalarWrapper(false))
 end
 
 """
@@ -185,13 +184,15 @@ function close!(ch::ConstraintHandler)
         ch.dofmapping[ch.prescribed_dofs[i]] = i
     end
 
+    #TODO: Store index for each affine constraint?
+    # affine_mapping = Dict{Int,Int}(pdof => i for (i,pdof) in enumerate(cd.prescribed_dofs) if ch.dofcoefficients[i]!==nothing )
+
     # TODO:
     # Do a bunch of checks to see if the affine constraints are linearly indepented etc.
     # If they are not, it is possible to automatically reformulate the constraints
     # such that they become independent. However, at this point, it is left to
     # the user to assure this.
 
-    ch.has_affine[] = any(i->i!==nothing, ch.dofcoefficients)
     ch.closed[] = true
     return ch
 end
@@ -236,21 +237,20 @@ end
 Add the `AffineConstraint` to the `ConstraintHandler`.
 """
 function add!(ch::ConstraintHandler, ac::AffineConstraint)
-    add_constrained_dof!(ch, ac.constrained_dof, ac.b, ac.entries)
+    add_prescribed_dof!(ch, ac.constrained_dof, ac.b, ac.entries)
 end
 
 """
-    add_constrained_dof!(ch, constrained_dof::Int, inhomogeneity::T, dofcoefficients=nothing) where T
+    add_prescribed_dof!(ch, constrained_dof::Int, inhomogeneity::T, dofcoefficients=nothing) where T
 
 Add a constrained dof directly to the `ConstraintHandler`.
 This function checks if the `constrained_dof` is already constrained, and overrides to old constraint if true.
-This function should be used instead of pushing dofs manually to `ch.prescribed_dofs`.
 """
-function add_constrained_dof!(ch::ConstraintHandler, constrained_dof::Int, inhomogeneity::T, dofcoefficients=nothing) where T
+function add_prescribed_dof!(ch::ConstraintHandler, constrained_dof::Int, inhomogeneity::T, dofcoefficients=nothing) where T
     @assert(!isclosed(ch))
     i = get(ch.dofmapping, constrained_dof, 0)
     if i != 0
-        #WARNING: Overrding constraint
+        #WARNING: dof already prescribed, overrding old constraint
         ch.prescribed_dofs[i] = constrained_dof
         ch.inhomogeneities[i] = inhomogeneity
         ch.dofcoefficients[i] = dofcoefficients
@@ -288,7 +288,7 @@ function _add!(ch::ConstraintHandler, dbc::Dirichlet, bcfaces::Set{Index}, inter
     push!(ch.dbcs, dbc)
     push!(ch.bcvalues, bcvalue)
     for d in constrained_dofs
-        add_constrained_dof!(ch, d, NaN, nothing)
+        add_prescribed_dof!(ch, d, NaN, nothing)
     end
     return ch
 end
@@ -355,7 +355,7 @@ function _add!(ch::ConstraintHandler, dbc::Dirichlet, bcnodes::Set{Int}, interpo
     push!(ch.dbcs, dbc)
     push!(ch.bcvalues, bcvalue)
     for d in constrained_dofs
-        add_constrained_dof!(ch, d, NaN, nothing)
+        add_prescribed_dof!(ch, d, NaN, nothing)
     end
     return ch
 end
@@ -366,14 +366,14 @@ function update!(ch::ConstraintHandler, time::Real=0.0)
     for (i,dbc) in enumerate(ch.dbcs)
         # Function barrier
         _update!(ch.inhomogeneities, dbc.f, dbc.faces, dbc.field_name, dbc.local_face_dofs, dbc.local_face_dofs_offset,
-                 dbc.components, ch.dh, ch.bcvalues[i], ch.dofmapping, convert(Float64, time))
+                 dbc.components, ch.dh, ch.bcvalues[i], ch.dofmapping, ch.dofcoefficients, convert(Float64, time))
     end
 end
 
 # for faces
 function _update!(inhomogeneities::Vector{Float64}, f::Function, faces::Set{<:BoundaryIndex}, field::Symbol, local_face_dofs::Vector{Int}, local_face_dofs_offset::Vector{Int},
                   components::Vector{Int}, dh::AbstractDofHandler, facevalues::BCValues,
-                  dofmapping::Dict{Int,Int}, time::T) where {T}
+                  dofmapping::Dict{Int,Int}, dofcoefficients::Vector{Union{Nothing,DofCoefficients{T}}}, time::T) where {T}
 
     dim = getdim(dh.grid)
     _tmp_cellid = first(faces)[1]
@@ -404,8 +404,10 @@ function _update!(inhomogeneities::Vector{Float64}, f::Function, faces::Set{<:Bo
                 counter += 1
 
                 dbc_index = dofmapping[globaldof]
-                inhomogeneities[dbc_index] = bc_value[i]
-                @debug println("prescribing value $(bc_value[i]) on global dof $(globaldof)")
+                if dofcoefficients[dbc_index] === nothing
+                    inhomogeneities[dbc_index] = bc_value[i]
+                    @debug println("prescribing value $(bc_value[i]) on global dof $(globaldof)")
+                end
             end
         end
     end
@@ -414,7 +416,7 @@ end
 # for nodes
 function _update!(inhomogeneities::Vector{Float64}, f::Function, nodes::Set{Int}, field::Symbol, nodeidxs::Vector{Int}, globaldofs::Vector{Int},
                   components::Vector{Int}, dh::AbstractDofHandler, facevalues::BCValues,
-                  dofmapping::Dict{Int,Int}, time::Float64)
+                  dofmapping::Dict{Int,Int}, dofcoefficients::Vector{Union{Nothing,DofCoefficients{T}}}, time::T) where T
     counter = 1
     for (idx, nodenumber) in enumerate(nodeidxs)
         x = dh.grid.nodes[nodenumber].x
@@ -424,8 +426,10 @@ function _update!(inhomogeneities::Vector{Float64}, f::Function, nodes::Set{Int}
             globaldof = globaldofs[counter]
             counter += 1
             dbc_index = dofmapping[globaldof]
-            inhomogeneities[dbc_index] = v
-            @debug println("prescribing value $(v) on global dof $(globaldof)")
+            if dofcoefficients[dbc_index] === nothing
+                inhomogeneities[dbc_index] = v
+                @debug println("prescribing value $(v) on global dof $(globaldof)")
+            end
         end
     end
 end
@@ -581,9 +585,7 @@ function apply!(KK::Union{SparseMatrixCSC,Symmetric}, f::AbstractVector, ch::Con
     end
 
     # Condense K (C' * K * C) and f (C' * f)
-    if ch.has_affine[]
-        _condense!(K, f, ch.dofcoefficients, ch.dofmapping)
-    end
+    _condense!(K, f, ch.dofcoefficients, ch.dofmapping)
 
     # Remove constrained dofs from the matrix
     zero_out_columns!(K, ch.prescribed_dofs)
@@ -612,6 +614,9 @@ end
 # Similar to Ferrite._condense!(K, ch), but only add the non-zero entries to K (that arises from the condensation process)
 function _condense_sparsity_pattern!(K::SparseMatrixCSC{T}, dofcoefficients::Vector{Union{Nothing,DofCoefficients{T}}}, dofmapping::Dict{Int,Int}) where T
     ndofs = size(K, 1)
+
+    has_affine = any(i->i!==nothing, dofcoefficients)
+    !has_affine && return
 
     #Adding new entries to K is extremely slow, so create a new sparsity triplet for the condensed sparsity pattern
     N = length(dofcoefficients)*2 # TODO: Better size estimate for additional condensed sparsity pattern.
@@ -688,6 +693,9 @@ function _condense!(K::SparseMatrixCSC, f::AbstractVector, dofcoefficients::Vect
     condense_f = !(length(f) == 0)
     condense_f && @assert( length(f) == ndofs )
 
+    has_affine = any(i->i!==nothing, dofcoefficients)
+    !has_affine && return
+
     for col in 1:ndofs
         dcol = get(dofmapping, col, 0)
         if dcol == 0
@@ -740,7 +748,7 @@ function _condense!(K::SparseMatrixCSC, f::AbstractVector, dofcoefficients::Vect
                 for (d,v) in dofcoef
                     f[d] += f[col] * v
                 end
-                #f[col] = 0.0
+                f[col] = 0.0
             end
         end
     end
