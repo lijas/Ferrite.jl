@@ -96,6 +96,16 @@ function create_values(refshape, dim, order::Int)
     return cellvalues, facevalues
 end;
 
+function create_values2(refshape, order::Int)
+    ## Interpolations and values
+    interpolation_space = Lagrange{3, refshape, 1}()
+    quadrature_rule = QuadratureRule{3, refshape}(order)
+    face_quadrature_rule = QuadratureRule{2, refshape}(order)
+    cellvalues = CellVectorValues(quadrature_rule, interpolation_space)
+    facevalues = FaceVectorValues(face_quadrature_rule, interpolation_space)
+    return cellvalues, facevalues
+end;
+
 # Create a `ScratchValues` for each thread with the thread local data
 function create_scratchvalues(K, f, dh::DofHandler{dim}) where {dim}
     nthreads = Threads.nthreads()
@@ -116,29 +126,58 @@ function create_scratchvalues(K, f, dh::DofHandler{dim}) where {dim}
                          ɛs[i], coordinates[i], assemblers[i]) for i in 1:nthreads]
 end;
 
+function create_scratchbuffer(K, f, dh::DofHandler)
+    assembler = start_assemble(K, f; fillzero=false)
+    cellvalues, facevalues = create_values2(RefCube,  2)
+
+    nd = ndofs_per_cell(dh)
+    global_dofs = zeros(Int, nd)
+    fe = zeros(nd)
+    ke = zeros(nd, nd)
+    ε = [zero(SymmetricTensor{2, 3}) for _ in 1:nd]
+    coordinates = [zero(Vec{3}) for _ in 1:length(dh.grid.cells[1].nodes)]
+
+    return ScratchValues(ke, fe, cellvalues, facevalues, global_dofs, ε, coordinates, assembler)
+end;
+
 # ## Threaded assemble
 
 # The assembly function loops over each color and does a threaded assembly for that color
-function doassemble(K::SparseMatrixCSC, colors, grid::Grid, dh::DofHandler, C::SymmetricTensor{4, dim}) where {dim}
+function doassemble(K::SparseMatrixCSC, f, colors, grid::Grid, dh::DofHandler, C::SymmetricTensor{4, dim}) where {dim}
 
-    f = zeros(ndofs(dh))
     scratches = create_scratchvalues(K, f, dh)
-    b = Vec{3}((0.0, 0.0, 0.0)) # Body force
-
     for color in colors
         ## Each color is safe to assemble threaded
-        Threads.@threads for i in 1:length(color)
-            assemble_cell!(scratches[Threads.threadid()], color[i], K, grid, dh, C, b)
+        Threads.@threads :static for i in 1:length(color)
+            assemble_cell!(scratches[Threads.threadid()], color[i], grid, dh, C)
         end
     end
+#=
+    for color in colors
+        @sync begin
+            workqueue = Channel{Int}(Inf)
+            foreach(x -> put!(workqueue, x), color)
+            close(workqueue)
+            for _ in 1:Threads.nthreads()
+                Threads.@spawn begin
+                    local scratch = create_scratchbuffer(K, f, dh)
+                    for ci in workqueue
+                        # println("Now I am doing color $(ci)")
+                        assemble_cell!(scratch, ci, grid, dh, C)
+                    end
+                end
+            end
+        end
+    end
+=#
 
     return K, f
 end
 
 # The cell assembly function is written the same way as if it was a single threaded example.
 # The only difference is that we unpack the variables from our `scratch`.
-function assemble_cell!(scratch::ScratchValues, cell::Int, K::SparseMatrixCSC,
-                        grid::Grid, dh::DofHandler, C::SymmetricTensor{4, dim}, b::Vec{dim}) where {dim}
+function assemble_cell!(scratch::ScratchValues, cell::Int,
+                        grid::Grid, dh::DofHandler, C::SymmetricTensor{4, dim}) where {dim}
 
     ## Unpack our stuff from the scratch
     Ke, fe, cellvalues, facevalues, global_dofs, ɛ, coordinates, assembler =
@@ -147,6 +186,7 @@ function assemble_cell!(scratch::ScratchValues, cell::Int, K::SparseMatrixCSC,
 
     fill!(Ke, 0)
     fill!(fe, 0)
+    b = Vec{3}((0.0, 0.0, 0.0)) # Body force
 
     n_basefuncs = getnbasefunctions(cellvalues)
 
@@ -181,15 +221,16 @@ function run_assemble()
     refshape = RefCube
     quadrature_order = 2
     dim = 3
-    n = 20
+    n = 15
     grid, colors = create_colored_cantilever_grid(Hexahedron, n);
     dh = create_dofhandler(grid);
 
     K = create_sparsity_pattern(dh);
     C = create_stiffness(Val{3}());
+    f = zeros(Float64, ndofs(dh))
     ## compilation
-    doassemble(K, colors, grid, dh, C);
-    b = @elapsed @time K, f = doassemble(K, colors, grid, dh, C);
+    doassemble(K, f, colors, grid, dh, C);
+    b = @elapsed @time K, f = doassemble(K, f, colors, grid, dh, C);
     return b
 end
 

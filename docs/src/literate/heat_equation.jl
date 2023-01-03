@@ -45,7 +45,7 @@ using Ferrite, SparseArrays
 # We start by generating a simple grid with 20x20 quadrilateral elements
 # using `generate_grid`. The generator defaults to the unit square,
 # so we don't need to specify the corners of the domain.
-grid = generate_grid(Quadrilateral, (20, 20));
+grid = generate_grid(Quadrilateral, (5, 5));
 
 # ### Trial and test functions
 # A `CellValues` facilitates the process of evaluating values and gradients of
@@ -191,6 +191,7 @@ function assemble_global(cellvalues::CellScalarValues, K::SparseMatrixCSC, dh::D
         ## Compute element contribution
         assemble_element!(Ke, fe, cellvalues)
         ## Assemble Ke and fe into K and f
+        @show Ke
         assemble!(assembler, celldofs(cell), Ke, fe)
     end
     return K, f
@@ -205,9 +206,11 @@ K, f = assemble_global(cellvalues, K, dh);
 # To account for the boundary conditions we use the `apply!` function.
 # This modifies elements in `K` and `f` respectively, such that
 # we can get the correct solution vector `u` by using `\`.
+nzero =  count(i-> i==0, K.nzval)
+@show nzero
+@show length(K.nzval)
 apply!(K, f, ch)
 u = K \ f;
-
 # ### Exporting to VTK
 # To visualize the result we export the grid and our field `u`
 # to a VTK-file, which can be viewed in e.g. [ParaView](https://www.paraview.org/).
