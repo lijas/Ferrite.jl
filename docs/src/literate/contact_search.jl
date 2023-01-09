@@ -51,6 +51,15 @@ struct ContactData{S,M,pdim,sdim}
     δξ
 end
 
+function collect_active_set(data::Vector{ContactData})
+    set = Set{Int}()
+    for d in data
+        dof = first(d.node.dofs)
+        push!(set, dof)
+    end
+    return set
+end
+
 mutable struct Node2SurfaceContact{dim,CS<:ContactSurface}
 	
     segments::Vector{CS}
@@ -81,7 +90,7 @@ function Node2SurfaceContact(slave_nodes::Vector{CN}, master_segments::Vector{CS
                             Tuple{Int,Int}[])
 end
 
-function update_contact!(contact::Node2SurfaceContact{2}, x::Vector{Float64})
+function global_search!(contact::Node2SurfaceContact{2}, x::Vector{Float64})
 
     (; segments, bounding_boxes)    = contact
     (; node_bucketid, nnodes_in_bucket, bucketid_to_nodeid, bucketid_to_nodeid_offset, nbuckets, bucket_size) = contact
@@ -110,12 +119,9 @@ function update_contact!(contact::Node2SurfaceContact{2}, x::Vector{Float64})
         bucket_size = min(bucket_size, max_dimension) 
     end
 
-    nbucketsx = trunc(Int, (maxx-minx)/bucket_size)
-    nbucketsy = trunc(Int, (maxy-miny)/bucket_size)
+    nbucketsx = ceil(Int, (maxx-minx)/bucket_size)
+    nbucketsy = ceil(Int, (maxy-miny)/bucket_size)
     nbuckets = nbucketsy*nbucketsx
-
-    @show nbucketsy,nbucketsx
-    @show maxx maxy minx miny
 
     resize!(nnodes_in_bucket, nbuckets)
     fill!(nnodes_in_bucket,  0)
@@ -134,7 +140,6 @@ function update_contact!(contact::Node2SurfaceContact{2}, x::Vector{Float64})
         (iy > nbucketsy) && continue
         (iy < 1) && continue
         ib = (iy-1)*nbucketsx + ix
-        @show i, node_coord, ix, iy, ib
         nnodes_in_bucket[ib] += 1
         node_bucketid[i] = ib
     end
@@ -154,11 +159,6 @@ function update_contact!(contact::Node2SurfaceContact{2}, x::Vector{Float64})
     end
 
     contact.nbuckets = nbuckets
-
-    @show nnodes_in_bucket
-    @show node_bucketid
-    @show bucketid_to_nodeid
-    @show bucketid_to_nodeid_offset
 
     empty!(contact.possible_contacts)
     for (i, master) in enumerate(segments)
@@ -194,7 +194,7 @@ function update_contact!(contact::Node2SurfaceContact{2}, x::Vector{Float64})
 end
 
 
-function update_contact!(contact::Node2SurfaceContact{3,T}, x) where {T}
+function global_search!(contact::Node2SurfaceContact{3,T}, x) where {T}
 
     (; masters, nodes, bounding_boxes, node_segements)     = contact
     (; node_bucketid, nnode_bucketid, nnodes_in_bucket, bucketid_to_nodeid, bucketid_to_nodeid_offset, nbuckets, bucket_size) = contact
@@ -318,7 +318,7 @@ function update_contact!(contact::Node2SurfaceContact{3,T}, x) where {T}
     end
 end
 
-function search1!(contact::Node2SurfaceContact, x)
+function local_search!(contact::Node2SurfaceContact, x)
     contacts = ContactData[]
     ncontacts = 0
     nodes_in_contact = Dict{Int,Int}()
@@ -345,7 +345,11 @@ function search1!(contact::Node2SurfaceContact, x)
     return contacts
 end
 
-
+function search_contact!(contact::Node2SurfaceContact, x)
+    global_search!(contact, x)
+    @show length(contact.possible_contacts)
+    local_search!(contact, x)
+end
 
 
 
@@ -472,16 +476,16 @@ function local_contact_search(node::ContactNode{sdim}, surface::ContactSurface, 
 
     function Rξ(a::Vector{T}) where T # ξ is constant
         #Node
-        us = Vec{sdim,T}(i -> a[node.dofs[i]])
-        xs = node.X + us
+        _us = Vec{sdim,T}(i -> a[node.dofs[i]])
+        _xs = node.X + _us
     
         #Surface 
-        ae = a[collect(surface.dofs)]
-        disps = reinterpret(Vec{sdim,T}, ae)
-        coords = surface.X .+ disps
+        _ae = a[collect(surface.dofs)]
+        _disps = reinterpret(Vec{sdim,T}, _ae)
+        _coords = surface.X .+ _disps
 
         #Function
-        return min_dist(xs, surface.ip, coords, ξ)
+        return min_dist(_xs, surface.ip, _coords, ξ)
     end
     
     dRda = ForwardDiff.jacobian(Rξ, a)
@@ -495,6 +499,7 @@ function local_contact_search(node::ContactNode{sdim}, surface::ContactSurface, 
     surface_tangents = function_derivatives(surface.ip, ξ, coords)
 
     n = compute_normal(surface_tangents...)
+    L = sqrt(norm(n)) #characheristic length?
 
     g = (xs - xm)⋅n
 
@@ -502,7 +507,7 @@ function local_contact_search(node::ContactNode{sdim}, surface::ContactSurface, 
 
     iscontact = false
     if all( -1.0 .< ξ .< 1.0 )
-        if g < 0.0
+        if g <= L/1000
             iscontact = true
         end
     end
@@ -510,6 +515,7 @@ function local_contact_search(node::ContactNode{sdim}, surface::ContactSurface, 
     return iscontact, data
 end
 
+#=
 xs = Vec{2,Float64}((0.5,0.01))
 node = ContactNode((1,2), xs)
 
@@ -519,3 +525,4 @@ surface = ContactSurface{2,typeof(faceip),4,2}(faceip, (2,3,4,5), Xm)
 
 a = zeros(Float64, 6)
 local_contact_search(node, surface, a)
+=#
