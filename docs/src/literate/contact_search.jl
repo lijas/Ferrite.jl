@@ -119,8 +119,8 @@ function global_search!(contact::Node2SurfaceContact{2}, x::Vector{Float64})
         bucket_size = min(bucket_size, max_dimension) 
     end
 
-    nbucketsx = ceil(Int, (maxx-minx)/bucket_size)
-    nbucketsy = ceil(Int, (maxy-miny)/bucket_size)
+    nbucketsx = trunc(Int, (maxx-minx)/bucket_size)
+    nbucketsy = trunc(Int, (maxy-miny)/bucket_size)
     nbuckets = nbucketsy*nbucketsx
 
     resize!(nnodes_in_bucket, nbuckets)
@@ -129,14 +129,16 @@ function global_search!(contact::Node2SurfaceContact{2}, x::Vector{Float64})
     fill!(node_bucketid, -1)
     resize!(bucketid_to_nodeid_offset, nbuckets)
 
+    _bucket_id(x, min, max, n) = trunc(Int, n*(x - min)/(max-min)) + 1
+
     for (i, node) in enumerate(contact.nodes)
 
         node_coord = node.X + x[Vec(node.dofs)]
-        ix = trunc(Int, (node_coord[1] - minx)/bucket_size) + 1
+        ix = _bucket_id(node_coord[1], minx, maxx, nbucketsx)# trunc(Int, (node_coord[1] - minx)/bucket_size) + 1
         (ix > nbucketsx) && continue
         (ix < 1) && continue
         
-        iy = trunc(Int, (node_coord[2] - miny)/bucket_size) + 1
+        iy = _bucket_id(node_coord[2], miny, maxy, nbucketsy)#trunc(Int, (node_coord[2] - miny)/bucket_size) + 1
         (iy > nbucketsy) && continue
         (iy < 1) && continue
         ib = (iy-1)*nbucketsx + ix
@@ -166,11 +168,15 @@ function global_search!(contact::Node2SurfaceContact{2}, x::Vector{Float64})
         min_coords = aabb.corner
         max_coords = aabb.corner + aabb.sidelength
 
-        ibox_min = min(nbucketsx, trunc(Int, (min_coords[1]-minx)/bucket_size)+1)
-        ibox_max = min(nbucketsx, trunc(Int, (max_coords[1]-minx)/bucket_size)+1)
+        ibox_min = _bucket_id(min_coords[1], minx, maxx, nbucketsx)# min(nbucketsx, trunc(Int, (min_coords[1]-minx)/bucket_size)+1)
+        ibox_min = clamp(ibox_min, 1, nbucketsx)
+        ibox_max = _bucket_id(max_coords[1], minx, maxx, nbucketsx)#min(nbucketsx, trunc(Int, (max_coords[1]-minx)/bucket_size)+1)
+        ibox_max = clamp(ibox_max, 1, nbucketsx)
 
-        jbox_min = min(nbucketsy, trunc(Int, (min_coords[2]-miny)/bucket_size)+1)
-        jbox_max = min(nbucketsy, trunc(Int, (max_coords[2]-miny)/bucket_size)+1)
+        jbox_min = _bucket_id(min_coords[2], miny, maxy, nbucketsy)
+        jbox_min = clamp(jbox_min, 1, nbucketsy)
+        jbox_max = _bucket_id(max_coords[2], miny, maxy, nbucketsy)
+        jbox_max = clamp(jbox_max, 1, nbucketsy)
 
         for ix in ibox_min:ibox_max
             for iy in jbox_min:jbox_max

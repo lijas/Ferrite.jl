@@ -79,6 +79,74 @@ function construct_grid()
     return grid
 end
 
+function construct_grid2()
+
+    # Initialize gmsh
+    gmsh.initialize()
+    gmsh.clear()
+    gmsh.initialize()
+    gmsh.model.add("model")
+
+    gmsh.option.set_number("General.Verbosity", 1)
+
+    w = 2.0
+    h = 2.0
+    r = w/2
+
+    body1 = gmsh.model.occ.add_rectangle(0.0, 0.0, 0.0, 2w, 2h)
+
+    x = 0.0
+    y = 2h + r + eps(Float64)
+
+    body2_1 = gmsh.model.occ.add_rectangle(x, y, 0.0, w, h)
+    body2_2 = gmsh.model.occ.add_disk(x + w/h, y, 0.0, r, r)
+    
+    newbodydimtags, map = gmsh.model.occ.fuse([(2,body2_1)], [(2,body2_2)], body2_2+1)
+    body2 = newbodydimtags[1][2]
+
+    _, body1tags = gmsh.model.occ.getCurveLoops(body1)
+    _, body2tags = gmsh.model.occ.getCurveLoops(body2)
+
+   # @show body1tags
+    #@show body2tags
+
+    # Synchronize the model
+    gmsh.model.occ.synchronize()
+    
+   # gmsh.fltk.run()
+   # asdf
+
+    # Create the physical domains
+    gmsh.model.add_physical_group(1, body1tags[1], -1, "contactsurfaces")
+    #gmsh.model.add_physical_group(1, body2tags[1], -1, "contactnodes")
+    #gmsh.model.add_physical_group(1, [body1tags[1][3]], -1, "contactsurfaces")
+    gmsh.model.add_physical_group(1, [body2tags[1][2]], -1, "contactnodes")
+    gmsh.model.add_physical_group(1, [body2tags[1][4]], -1, "body2_top")
+    gmsh.model.add_physical_group(1, [body1tags[1][1]], -1, "body1_bottom")
+    gmsh.model.add_physical_group(2, [body1, body2])
+
+    meshsize = 0.5
+    ov = gmsh.model.getEntities(-1);
+    gmsh.model.mesh.setSize(ov, meshsize);
+
+    # Generate a 2D mesh
+    gmsh.model.mesh.generate(2)
+
+    # Save the mesh, and read back in as a Ferrite Grid
+    grid = mktempdir() do dir
+        path = joinpath(dir, "mesh.msh")
+        gmsh.write(path)
+        togrid(path)
+    end
+
+    #grid = togrid()
+
+    # Finalize the Gmsh library
+    gmsh.finalize()
+
+    return grid
+end
+
 function collect_dofs!(facedofs::Vector, dh, faceid::FaceIndex)
 
     cellid, lfaceidx = faceid
@@ -327,7 +395,7 @@ end
 function go()
 
     dim = 2
-    grid = construct_grid()
+    grid = construct_grid2()
     celltype = getcelltype(grid)
     
     addcellset!(grid, "contactsurfaces", first.(getfaceset(grid, "contactsurfaces")))
@@ -337,8 +405,18 @@ function go()
     push!(dh, :u, dim)
     close!(dh)
 
+    boundary_movement(x,t) = begin
+        local m
+        if t <= 0.1
+            m = (0.0, -1.0*t)
+        else
+            m = ((t-0.1)*1.0, -1.0*0.1)
+        end
+        return m
+    end
+
     ch = ConstraintHandler(dh)
-    dcb = Dirichlet(:u, getfaceset(grid, "body2_top"), (x, t) -> (0.0, -1.0*t), 1:dim)
+    dcb = Dirichlet(:u, getfaceset(grid, "body2_top"), (x, t) -> boundary_movement(x,t), 1:dim)
     add!(ch, dcb)
     dcb = Dirichlet(:u, getfaceset(grid, "body1_bottom"), (x, t) -> (0.0, 0.0), 1:dim)
     add!(ch, dcb)
@@ -394,17 +472,16 @@ function go()
     active_set = collect_active_set(contact_data)
 
     previous_active_set = copy(active_set)
-    ntimesteps = 4
+    ntimesteps = 20
     t = 0
     Δt = 0.02
     TOL = 1e-10
     for istep in 0:ntimesteps
-        @show istep
         t = Δt*istep
         update!(ch, t)
         apply!(a, ch)
 
-        nnewton_itr = 0
+        nnewton_itr = 0 
         while true #Newton iterations
             fill!(K, 0.0)
             fill!(f, 0.0)
@@ -426,7 +503,7 @@ function go()
             if norm(r) < TOL
                 contact_data = search_contact!(contact, a)
                 active_set = collect_active_set(contact_data)
-                @show active_set
+                @info active_set
                 if active_set == previous_active_set
                     previous_active_set = active_set
                     break
