@@ -393,25 +393,18 @@ function _distribute_dofs_for_cell!(dh::DofHandler{sdim}, cell::AbstractCell, ip
     )
 
     # Distribute dofs for edges (only applicable when dim is 3)
-    if sdim == 3 && (ip_info.reference_dim == 3 || ip_info.reference_dim == 2)
-        # Regular 3D element or 2D interpolation embedded in 3D space
-        nentitydofs = ip_info.reference_dim == 3 ? ip_info.nedgedofs : ip_info.nfacedofs
-        nextdof = add_edge_dofs(
-            dh.cell_dofs, cell, edgedict,
-            nentitydofs, nextdof,
-            ip_info.adjust_during_distribution, ip_info.n_copies,
-        )
-    end
+    nextdof = add_edge_dofs(
+        dh.cell_dofs, cell, edgedict,
+        ip_info.nedgedofs, nextdof,
+        ip_info.adjust_during_distribution, ip_info.n_copies,
+    )
 
-    # Distribute dofs for faces. Filter out 2D interpolations in 3D space, since
-    # they are added above as edge dofs.
-    if ip_info.reference_dim == sdim && sdim > 1
-        nextdof = add_face_dofs(
-            dh.cell_dofs, cell, facedict,
-            ip_info.nfacedofs, nextdof,
-            ip_info.adjust_during_distribution, ip_info.n_copies,
-        )
-    end
+    # Distribute dofs for faces. 
+    nextdof = add_face_dofs(
+        dh.cell_dofs, cell, facedict,
+        ip_info.nfacedofs, nextdof,
+        ip_info.adjust_during_distribution, ip_info.n_copies,
+    )
 
     # Distribute internal dofs for cells
     nextdof = add_cell_dofs(

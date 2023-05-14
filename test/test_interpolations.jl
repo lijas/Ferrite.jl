@@ -61,39 +61,26 @@
 
     # Test whether we have for each entity corresponding dof indices (possibly empty)
     @test length(Ferrite.vertexdof_indices(interpolation)) == Ferrite.nvertices(interpolation)
-    if ref_dim > 1
-        @test length(Ferrite.facedof_indices(interpolation)) == Ferrite.nfaces(interpolation)
-        @test length(Ferrite.facedof_interior_indices(interpolation)) == Ferrite.nfaces(interpolation)
-    elseif ref_dim > 2
-        @test length(Ferrite.edgedof_indices(interpolation)) == Ferrite.nedges(interpolation)
-        @test length(Ferrite.edgedof_interior_indices(interpolation)) == Ferrite.nedges(interpolation)
-    end
+    @test length(Ferrite.facedof_indices(interpolation)) == Ferrite.nfaces(interpolation)
+    @test length(Ferrite.facedof_interior_indices(interpolation)) == Ferrite.nfaces(interpolation)
+    @test length(Ferrite.edgedof_indices(interpolation)) == Ferrite.nedges(interpolation)
+    @test length(Ferrite.edgedof_interior_indices(interpolation)) == Ferrite.nedges(interpolation)
     # We have at least as many edge/face dofs as we have edge/face interior dofs
-    if ref_dim > 1
-        @test all(length.(Ferrite.facedof_interior_indices(interpolation)) .<= length.(Ferrite.facedof_indices(interpolation)))
-    elseif ref_dim > 2
-        @test all(length.(Ferrite.edgedof_interior_indices(interpolation)) .<= length.(Ferrite.edgedof_indices(interpolation)))
-    end
+    @test all(length.(Ferrite.facedof_interior_indices(interpolation)) .<= length.(Ferrite.facedof_indices(interpolation)))
+    @test all(length.(Ferrite.edgedof_interior_indices(interpolation)) .<= length.(Ferrite.edgedof_indices(interpolation)))
     # The total number of dofs must match the number of base functions
     totaldofs = sum(length.(Ferrite.vertexdof_indices(interpolation));init=0)
-    if ref_dim > 1
-        totaldofs += sum(length.(Ferrite.facedof_interior_indices(interpolation));init=0)
-    end
-    if ref_dim > 2
-        totaldofs += sum(length.(Ferrite.edgedof_interior_indices(interpolation));init=0) 
-    end
+    totaldofs += sum(length.(Ferrite.facedof_interior_indices(interpolation));init=0)
+    totaldofs += sum(length.(Ferrite.edgedof_interior_indices(interpolation));init=0) 
     totaldofs += length(Ferrite.celldof_interior_indices(interpolation))
     @test totaldofs == n_basefuncs
 
     # The dof indices are valid.
     @test all([all(0 .< i .<= n_basefuncs) for i ∈ Ferrite.vertexdof_indices(interpolation)])
-    if ref_dim > 1
-        @test all([all(0 .< i .<= n_basefuncs) for i ∈ Ferrite.facedof_indices(interpolation)])
-        @test all([all(0 .< i .<= n_basefuncs) for i ∈ Ferrite.facedof_interior_indices(interpolation)])
-    elseif ref_dim > 2
-        @test all([all(0 .< i .<= n_basefuncs) for i ∈ Ferrite.edgedof_indices(interpolation)])
-        @test all([all(0 .< i .<= n_basefuncs) for i ∈ Ferrite.edgedof_interior_indices(interpolation)])
-    end
+    @test all([all(0 .< i .<= n_basefuncs) for i ∈ Ferrite.facedof_indices(interpolation)])
+    @test all([all(0 .< i .<= n_basefuncs) for i ∈ Ferrite.facedof_interior_indices(interpolation)])
+    @test all([all(0 .< i .<= n_basefuncs) for i ∈ Ferrite.edgedof_indices(interpolation)])
+    @test all([all(0 .< i .<= n_basefuncs) for i ∈ Ferrite.edgedof_interior_indices(interpolation)])
     @test all([all(0 .< i .<= n_basefuncs) for i ∈ Ferrite.celldof_interior_indices(interpolation)])
 
     # Check for dirac delta property of interpolation
@@ -109,7 +96,7 @@
     end
 
     # Test that facedof_indices(...) return in counter clockwise order (viewing from the outside)
-    if interpolation isa Lagrange
+    if interpolation isa Lagrange && ref_dim == 3
         function __outward_normal(coords::Vector{<:Vec{1}}, nodes)
             n = coords[nodes[1]]
             return n / norm(n)

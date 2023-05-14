@@ -84,12 +84,16 @@ ch = ConstraintHandler(dh);
 
 # Next we need to add constraints to `ch`. For this problem we define
 # homogeneous Dirichlet boundary conditions on the whole boundary, i.e.
-# the `union` of all the face sets on the boundary.
+# the `union` of all the edge sets on the boundary. Note, however, that 
+# instead of calling e.g. `getedgeset(grid, "left")`, we use the
+# function `getfacetset`. The reason for this is that it provides a 
+# dimension independent way of obtaining the boundaries of the grid,
+# see [Definition of boundaries and facets](@ref) for more information.
 ∂Ω = union(
-    getfaceset(grid, "left"),
-    getfaceset(grid, "right"),
-    getfaceset(grid, "top"),
-    getfaceset(grid, "bottom"),
+    getfacetset(grid, "left"),
+    getfacetset(grid, "right"),
+    getfacetset(grid, "top"),
+    getfacetset(grid, "bottom"),
 );
 
 # Now we are set up to define our constraint. We specify which field
