@@ -88,9 +88,12 @@ function vertices(c::AbstractCell{1, RefLine})
     ns = get_node_ids(c)
     return (ns[1], ns[2]) # v1, v2
 end
-function faces(c::AbstractCell{1, RefLine})
+function edges(c::AbstractCell{1, RefLine})
     ns = get_node_ids(c)
-    return ((ns[1],), (ns[2],)) # f1, f2
+    return ((ns[1], ns[2]),) # f1, f2
+end
+function faces(::AbstractCell{1, RefLine})
+    return ()
 end
 
 # RefTriangle (refdim = 2): vertices for vertexdofs, faces for facedofs (edgedofs) and BC
@@ -98,10 +101,16 @@ function vertices(c::AbstractCell{2, RefTriangle})
     ns = get_node_ids(c)
     return (ns[1], ns[2], ns[3]) # v1, v2, v3
 end
-function faces(c::AbstractCell{2, RefTriangle})
+function edges(c::AbstractCell{2, RefTriangle})
     ns = get_node_ids(c)
     return (
         (ns[1], ns[2]), (ns[2], ns[3]), (ns[3], ns[1]), # f1, f2, f3
+    )
+end
+function faces(c::AbstractCell{2, RefTriangle})
+    ns = get_node_ids(c)
+    return (
+        (ns[1], ns[2], ns[3]), 
     )
 end
 
@@ -110,10 +119,16 @@ function vertices(c::AbstractCell{2, RefQuadrilateral})
     ns = get_node_ids(c)
     return (ns[1], ns[2], ns[3], ns[4]) # v1, v2, v3, v4
 end
-function faces(c::AbstractCell{2, RefQuadrilateral})
+function edges(c::AbstractCell{2, RefQuadrilateral})
     ns = get_node_ids(c)
     return (
         (ns[1], ns[2]), (ns[2], ns[3]), (ns[3], ns[4]), (ns[4], ns[1]), # f1, f2, f3, f4
+    )
+end
+function faces(c::AbstractCell{2, RefQuadrilateral})
+    ns = get_node_ids(c)
+    return (
+        (ns[1], ns[2], ns[3], ns[4]),
     )
 end
 
@@ -212,9 +227,6 @@ default_interpolation(::Type{QuadraticTetrahedron})   = Lagrange{3, RefTetrahedr
 default_interpolation(::Type{Hexahedron})             = Lagrange{3, RefCube,        1}()
 default_interpolation(::Type{QuadraticHexahedron})    = Lagrange{3, RefCube,        2}()
 default_interpolation(::Type{Wedge})                  = Lagrange{3, RefPrism,       1}()
-
-# TODO: Remove this, used for Quadrilateral3D
-edges(c::Quadrilateral#=3D=#) = faces(c)
 
 # Serendipity interpolation based cells
 struct SerendipityQuadraticQuadrilateral <: AbstractCell{2, RefQuadrilateral} nodes::NTuple{ 8, Int} end
@@ -725,6 +737,22 @@ Returns all vertex sets of the grid.
 
 n_faces_per_cell(grid::Grid) = nfaces(eltype(grid.cells))
 
+"""
+    getfacetset(grid::AbstractGrid, setname::String)
+
+Returns all facets in a `Set` of a given `setname`. 
+"""
+getfacetset(grid::AbstractGrid{sdim}, setname::String) where sdim = getfacetsets(grid)[setname]
+
+"""
+    getfacetsets(grid::AbstractGrid)
+
+Returns all facet sets of the grid.
+"""
+getfacetsets(grid::AbstractGrid{1}) = grid.vertexsets
+getfacetsets(grid::AbstractGrid{2}) = grid.edgesets
+getfacetsets(grid::AbstractGrid{3}) = grid.facesets
+
 # Transformations
 """
     transform!(grid::Abstractgrid, f::Function)
@@ -810,15 +838,28 @@ function _addset!(grid::AbstractGrid, name::String, _set, dict::Dict)
     grid
 end
 
+function facettype(sdim::Int) 
+    if sdim == 1
+        return VertexIndex    
+    elseif sdim == 2
+        return EdgeIndex
+    elseif sdim == 3
+        return FaceIndex
+    end
+end
+
+addfacetset!(grid::Grid{sdim}, name::String, f::Function; all::Bool=true) where {sdim} = 
+    _addset!(grid, name, f, facettype(grid), facettype(sdim); all=all)
 addfaceset!(grid::AbstractGrid, name::String, f::Function; all::Bool=true) = 
-    _addset!(grid, name, f, Ferrite.faces, grid.facesets, FaceIndex; all=all)
+    _addset!(grid, name, f, grid.facesets, FaceIndex; all=all)
 addedgeset!(grid::AbstractGrid, name::String, f::Function; all::Bool=true) = 
-    _addset!(grid, name, f, Ferrite.edges, grid.edgesets, EdgeIndex; all=all)
+    _addset!(grid, name, f, grid.edgesets, EdgeIndex; all=all)
 addvertexset!(grid::AbstractGrid, name::String, f::Function; all::Bool=true) = 
-    _addset!(grid, name, f, Ferrite.vertices, grid.vertexsets, VertexIndex; all=all)
-function _addset!(grid::AbstractGrid, name::String, f::Function, _ftype::Function, dict::Dict, _indextype::Type; all::Bool=true)
+    _addset!(grid, name, f, grid.vertexsets, VertexIndex; all=all)
+function _addset!(grid::AbstractGrid, name::String, f::Function, dict::Dict, _indextype::Type; all::Bool=true)
     _check_setname(dict, name)
     _set = Set{_indextype}()
+    _ftype = boundaryfunction(_indextype)
     for (cell_idx, cell) in enumerate(getcells(grid))
         for (face_idx, face) in enumerate(_ftype(cell))
             pass = all
