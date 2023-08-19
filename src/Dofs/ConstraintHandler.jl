@@ -31,16 +31,19 @@ dbc = Dirichlet(:v, ∂Ω, (x, t) -> [sin(t), cos(t)], [2, 3])
 `Dirichlet` boundary conditions are added to a [`ConstraintHandler`](@ref)
 which applies the condition via [`apply!`](@ref) and/or [`apply_zero!`](@ref).
 """
-struct Dirichlet # <: Constraint
+abstract type Constraint end
+
+struct Dirichlet <: Constraint
     f::Function # f(x) or f(x,t) -> value(s)
     faces::Union{Set{Int},Set{FaceIndex},Set{EdgeIndex},Set{VertexIndex}}
     field_name::Symbol
     components::Vector{Int} # components of the field
     local_face_dofs::Vector{Int}
     local_face_dofs_offset::Vector{Int}
+    bcvalues::Base.RefValue{BCValues}
 end
 function Dirichlet(field_name::Symbol, faces::Set, f::Function, components=nothing)
-    return Dirichlet(f, faces, field_name, __to_components(components), Int[], Int[])
+    return Dirichlet(f, faces, field_name, __to_components(components), Int[], Int[], Ref(BCValues(zeros(Float64,0,0,0), Int[], ScalarWrapper(1))))
 end
 
 # components=nothing is default and means that all components should be constrained
@@ -74,7 +77,7 @@ end
 Collection of constraints.
 """
 struct ConstraintHandler{DH<:AbstractDofHandler,T}
-    dbcs::Vector{Dirichlet}
+    constraints::Vector{Constraint}
     prescribed_dofs::Vector{Int}
     free_dofs::Vector{Int}
     inhomogeneities::Vector{T}
@@ -85,7 +88,6 @@ struct ConstraintHandler{DH<:AbstractDofHandler,T}
     dofcoefficients::Vector{Union{Nothing, DofCoefficients{T}}}
     # global dof -> index into dofs and inhomogeneities and dofcoefficients
     dofmapping::Dict{Int,Int}
-    bcvalues::Vector{BCValues{T}}
     dh::DH
     closed::ScalarWrapper{Bool}
 end
@@ -93,8 +95,8 @@ end
 function ConstraintHandler(dh::AbstractDofHandler)
     @assert isclosed(dh)
     ConstraintHandler(
-        Dirichlet[], Int[], Int[], Float64[], Union{Nothing,Float64}[], Union{Nothing,DofCoefficients{Float64}}[],
-        Dict{Int,Int}(), BCValues{Float64}[], dh, ScalarWrapper(false),
+        Constraint[], Int[], Int[], Float64[], Union{Nothing,Float64}[], Union{Nothing,DofCoefficients{Float64}}[],
+        Dict{Int,Int}(), dh, ScalarWrapper(false),
     )
 end
 
@@ -164,7 +166,7 @@ function Base.show(io::IO, ::MIME"text/plain", ch::ConstraintHandler)
         print(io, "  Not closed!")
     else
         print(io, "  BCs:")
-        for dbc in ch.dbcs
+        for dbc in ch.constraints
             print(io, "\n    ", "Field: ", dbc.field_name, ", ", "Components: ", dbc.components)
         end
     end
@@ -290,8 +292,8 @@ function _add!(ch::ConstraintHandler, dbc::Dirichlet, bcfaces::Set{Index}, inter
     end
 
     # save it to the ConstraintHandler
-    push!(ch.dbcs, dbc)
-    push!(ch.bcvalues, bcvalue)
+    push!(ch.constraints, dbc)
+    dbc.bcvalues[] = bcvalue
     for d in constrained_dofs
         add_prescribed_dof!(ch, d, NaN, nothing)
     end
@@ -356,8 +358,8 @@ function _add!(ch::ConstraintHandler, dbc::Dirichlet, bcnodes::Set{Int}, interpo
 
     # save it to the ConstraintHandler
     copy!(dbc.local_face_dofs_offset, constrained_dofs) # use this field to store the global dofs
-    push!(ch.dbcs, dbc)
-    push!(ch.bcvalues, bcvalue)
+    push!(ch.constraints, dbc)
+    dbc.bcvalues[] = bcvalue
     for d in constrained_dofs
         add_prescribed_dof!(ch, d, NaN, nothing)
     end
@@ -375,14 +377,8 @@ Note that this is called implicitly in `close!(::ConstraintHandler)`.
 """
 function update!(ch::ConstraintHandler, time::Real=0.0)
     @assert ch.closed[]
-    for (i, dbc) in pairs(ch.dbcs)
-        # If the BC function only accept one argument, i.e. f(x), we create a wrapper
-        # g(x, t) = f(x) that discards the second parameter so that _update! can always call
-        # the function with two arguments internally.
-        wrapper_f = hasmethod(dbc.f, Tuple{Any,Any}) ? dbc.f : (x, _) -> dbc.f(x)
-        # Function barrier
-        _update!(ch.inhomogeneities, wrapper_f, dbc.faces, dbc.field_name, dbc.local_face_dofs, dbc.local_face_dofs_offset,
-                 dbc.components, ch.dh, ch.bcvalues[i], ch.dofmapping, ch.dofcoefficients, time)
+    for constraint in ch.constraints
+        update_constraint!(constraint, ch, time)
     end
     # Compute effective inhomogeneity for affine constraints with prescribed dofs in the
     # RHS. For example, in u2 = w3 * u3 + w4 * u4 + b2 we allow e.g. u3 to be prescribed by
@@ -404,6 +400,16 @@ function update!(ch::ConstraintHandler, time::Real=0.0)
         ch.inhomogeneities[i] = h
     end
     return nothing
+end
+
+function update_constraint!(dbc::Dirichlet, ch::ConstraintHandler, time::Real)
+    # If the BC function only accept one argument, i.e. f(x), we create a wrapper
+    # g(x, t) = f(x) that discards the second parameter so that _update! can always call
+    # the function with two arguments internally.
+    wrapper_f = hasmethod(dbc.f, Tuple{Any,Any}) ? dbc.f : (x, _) -> dbc.f(x)
+    # Function barrier
+    _update!(ch.inhomogeneities, wrapper_f, dbc.faces, dbc.field_name, dbc.local_face_dofs, dbc.local_face_dofs_offset,
+             dbc.components, ch.dh, ch.bcvalues, ch.dofmapping, ch.dofcoefficients, time)
 end
 
 # for vertices, faces and edges
@@ -470,7 +476,8 @@ end
 # Values will have a 1 where bcs are active and 0 otherwise
 function WriteVTK.vtk_point_data(vtkfile, ch::ConstraintHandler)
     unique_fields = []
-    for dbc in ch.dbcs
+    for dbc in ch.constraints
+        !(dbc isa Dirichlet) && continue
         push!(unique_fields, dbc.field_name)
     end
     unique!(unique_fields)
@@ -478,7 +485,8 @@ function WriteVTK.vtk_point_data(vtkfile, ch::ConstraintHandler)
     for field in unique_fields
         nd = getfielddim(ch.dh, field)
         data = zeros(Float64, nd, getnnodes(get_grid(ch.dh)))
-        for dbc in ch.dbcs
+        for dbc in ch.constraints
+            !(dbc isa Dirichlet) && continue
             dbc.field_name != field && continue
             if eltype(dbc.faces) <: BoundaryIndex
                 functype = boundaryfunction(eltype(dbc.faces))
@@ -1761,4 +1769,62 @@ function _condense_local!(local_matrix::AbstractMatrix, local_vector::AbstractVe
             local_vector[local_col] = 0
         end
     end
+end
+
+
+struct Dirichlet <: Constraint
+    f::Function # f(x) or f(x,t) -> value(s)
+    faces::Union{Set{Int},Set{FaceIndex},Set{EdgeIndex},Set{VertexIndex}}
+    field_name::Symbol
+    components::Vector{Int} # components of the field
+    local_face_dofs::Vector{Int}
+    local_face_dofs_offset::Vector{Int}
+    bcvalues::Base.RefValue{BCValues}
+end
+
+struct MeanValueConstrant
+    set::Union{Set{Int},Set{FaceIndex}}
+    field_name::Symbol
+    components::Vector{Int}
+end
+
+function MeanValueConstrant(
+    field::Symbol,
+    cellset = nothing, #default all
+    rhs = 0.0, #default zero
+    components = nothing #default all
+)
+
+#add!(ch::ConstraintHandler, pdbc::PeriodicDirichlet)
+#add!(ch::ConstraintHandler, pdbc::Dirichlet)
+function Ferrite.add!(ch::ConstraintHandler, mvc::MeanValueConstrant)
+
+    _check_same_celltype(ch.dh.grid, mvc.set)
+
+    for sdh in ch.dh.subdofhandlers
+        # Skip if the constrained field does not live on this sub domain
+        mvc.field_name in sdh.field_names || continue
+        # Compute the intersection between dbc.set and the cellset of this
+        # SubDofHandler and skip if the set is empty
+        filtered_set = filter_dbc_set(get_grid(ch.dh), sdh.cellset, mvc.set)
+        isempty(filtered_set) && continue
+        # Fetch information about the field on this SubDofHandler
+        field_idx = find_field(sdh, mvc.field_name)
+        drange = dof_range(sdh, field_idx)
+
+        CT = getcelltype(get_grid(ch.dh), first(sdh.cellset))
+        ip_geo = default_interpolation(CT)
+        ip = getfieldinterpolation(sdh, field_idx)
+        cv = CellValues(qr, ip, ip_geo)
+
+
+        for celldata in CellIterator(ch.dh, filtered_set)
+            reinit!(cv, get_cell_coordinates(celldata))
+            for iqp in 1:getnquadpoints(cv)
+                
+            end
+        end
+
+    end
+
 end
