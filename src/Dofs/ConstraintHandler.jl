@@ -40,7 +40,7 @@ struct Dirichlet <: Constraint
     components::Vector{Int} # components of the field
     local_face_dofs::Vector{Int}
     local_face_dofs_offset::Vector{Int}
-    bcvalues::Base.RefValue{BCValues}
+    bcvalues::Base.RefValue{BCValues{Float64}}
 end
 function Dirichlet(field_name::Symbol, faces::Set, f::Function, components=nothing)
     return Dirichlet(f, faces, field_name, __to_components(components), Int[], Int[], Ref(BCValues(zeros(Float64,0,0,0), Int[], ScalarWrapper(1))))
@@ -409,7 +409,7 @@ function update_constraint!(dbc::Dirichlet, ch::ConstraintHandler, time::Real)
     wrapper_f = hasmethod(dbc.f, Tuple{Any,Any}) ? dbc.f : (x, _) -> dbc.f(x)
     # Function barrier
     _update!(ch.inhomogeneities, wrapper_f, dbc.faces, dbc.field_name, dbc.local_face_dofs, dbc.local_face_dofs_offset,
-             dbc.components, ch.dh, ch.bcvalues, ch.dofmapping, ch.dofcoefficients, time)
+             dbc.components, ch.dh, dbc.bcvalues[], ch.dofmapping, ch.dofcoefficients, time)
 end
 
 # for vertices, faces and edges
@@ -1771,17 +1771,54 @@ function _condense_local!(local_matrix::AbstractMatrix, local_vector::AbstractVe
     end
 end
 
+#
 
-struct Dirichlet <: Constraint
-    f::Function # f(x) or f(x,t) -> value(s)
-    faces::Union{Set{Int},Set{FaceIndex},Set{EdgeIndex},Set{VertexIndex}}
-    field_name::Symbol
-    components::Vector{Int} # components of the field
-    local_face_dofs::Vector{Int}
-    local_face_dofs_offset::Vector{Int}
-    bcvalues::Base.RefValue{BCValues}
+struct MatrixConstrant
+    C::AbstractMatrix
+    rhs::AbstractVector #default zero
 end
 
+#function MatrixConstrant(C::AbstractMatrix, rhs = zeros(eltype(C), size(size(C,1))) )
+#    MatrixConstrant(C,rhs)
+#end
+
+function add!(ch::ConstraintHandler, mc::MatrixConstrant)
+
+    _ndofs, nconstraints = size(mc.C)
+    @assert _ndofs == ndofs(ch.dh)
+
+    fac = SparseArrays.lu(mc.C')
+
+    C = mc.C'
+
+    @show _ndofs, nconstraints
+    @show depend = fac.p[1:nconstraints]
+    @show indep  = fac.p[(1+nconstraints):end]
+    free_dofs = setdiff(1:_ndofs, depend)
+
+    g = fac.L\mc.rhs
+
+    for i in 1:nconstraints
+        prescribed_dof = fac.p[i]
+        f = fac.U[i,prescribed_dof]
+        entries = DofCoefficients{Float64}()
+        _g = g[i]
+        nn = 0
+        for d in free_dofs
+            v = -fac.U[i,d]/f
+            if v ≈ 0.0
+                nn += 1
+                continue
+            end
+            push!(entries, (d=>v))
+        end
+        @show nn
+        add_prescribed_dof!(ch, prescribed_dof, _g, entries)
+    end
+
+end
+
+#
 struct MeanValueConstrant
     set::Union{Set{Int},Set{FaceIndex}}
     field_name::Symbol
@@ -1790,14 +1827,29 @@ end
 
 function MeanValueConstrant(
     field::Symbol,
-    cellset = nothing, #default all
+    cellset, #default all
     rhs = 0.0, #default zero
     components = nothing #default all
 )
 
+end
+
+function _uppdate(ch::ConstraintHandler, mvc::MeanValueConstrant)
+
+    ndofs = length()
+
+end
+
+function add!(ch::ConstraintHandler, mvc::MeanValueConstrant)
+
+
+
+
+end
+
 #add!(ch::ConstraintHandler, pdbc::PeriodicDirichlet)
 #add!(ch::ConstraintHandler, pdbc::Dirichlet)
-function Ferrite.add!(ch::ConstraintHandler, mvc::MeanValueConstrant)
+function add!(ch::ConstraintHandler, mvc::MeanValueConstrant)
 
     _check_same_celltype(ch.dh.grid, mvc.set)
 
