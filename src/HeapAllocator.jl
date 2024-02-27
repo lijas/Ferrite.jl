@@ -190,7 +190,6 @@ function free(heap::Heap, ptr::SizedPtr{UInt8})
 end
 
 function free(heap::Heap, ptr::SizedPtr)
-    error("TODO")
     return free(heap, SizedPtr{UInt8}(ptr))
 end
 
