@@ -80,7 +80,7 @@ end
 function _assemble_L2_matrix(fe_values, set, dh)
 
     n = Ferrite.getnbasefunctions(fe_values)
-    M = Symmetric(create_matrix(create_sparsity_pattern(dh; nnz_per_col = 2 * n)))
+    M = Symmetric(create_matrix(create_sparsity_pattern(dh; nnz_per_row = 2 * n)))
     assembler = start_assemble(M)
 
     Me = zeros(n, n)
@@ -220,7 +220,7 @@ function _project(vars, proj::L2Projector, fe_values::AbstractValues, M::Integer
 
     # Recast to original input type
     make_T(vals) = T <: AbstractTensor ? T(Tuple(vals)) : vals[1]
-    return T[make_T(x) for x in eachrow(projected_vals)]
+    return T[make_T(x) for x in Base.eachrow(projected_vals)]
 end
 
 function WriteVTK.vtk_point_data(vtk::WriteVTK.DatasetFile, proj::L2Projector, vals::Vector{T}, name::AbstractString) where T

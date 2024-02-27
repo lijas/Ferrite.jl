@@ -80,14 +80,15 @@ documentation.
 struct SparsityPattern <: AbstractSparsityPattern
     nrows::Int
     ncols::Int
-    rows::Vector{Vector{Int}}
+    heap::HeapAllocator.Heap
+    rows::Vector{HeapAllocator.HeapVector{Int}}
 end
 
 """
-    SparsityPattern(nrows::Int, ncols::Int; nnz_per_row::Int = 0)
+    SparsityPattern(nrows::Int, ncols::Int; nnz_per_row::Int = 8)
 
 Create an empty [`SparsityPattern`](@ref) with `nrows` rows and `ncols` columns.
-`nnz_per_row` is used as a memory optimization hint for the number of non zero entries per
+`nnz_per_row` is used as a memory hint for the number of non zero entries per
 row.
 
 `SparsityPattern` is the default sparsity pattern type for the standard DofHandler and is
@@ -108,11 +109,43 @@ more details):
  - [`create_matrix`](@ref create_matrix(::SparsityPattern)): instantiate a matrix from the pattern. The default matrix type
    is `SparseMatrixCSC{Float64, Int}`.
 """
-function SparsityPattern(nrows::Int, ncols::Int; nnz_per_row::Int = 0)
-    # Note: Empirical testing suggest resize!(Vector{Int}(undef, nnz_per_row), 0) is better
-    # than sizehint!(Vector{Int}(undef, 0), nnz_per_row).
-    rows = Vector{Int}[resize!(Vector{Int}(undef, nnz_per_row), 0) for _ in 1:nrows]
-    return SparsityPattern(nrows, ncols, rows)
+function SparsityPattern(nrows::Int, ncols::Int; nnz_per_row::Int = 8)
+    heap = HeapAllocator.Heap()
+    rows = Vector{HeapAllocator.HeapVector{Int}}(undef, nrows)
+    for i in 1:nrows
+        rows[i] = HeapAllocator.resize(HeapAllocator.alloc_array(heap, Int, nnz_per_row), 0)
+    end
+    return SparsityPattern(nrows, ncols, heap, rows)
+end
+
+function Base.show(io::IO, ::MIME"text/plain", sp::SparsityPattern)
+    iob = IOBuffer()
+    println(iob, "$(n_rows(sp))×$(n_cols(sp)) $(sprint(show, typeof(sp))):")
+    # Collect min/max/avg entries per row
+    min_entries = typemax(Int)
+    max_entries = typemin(Int)
+    stored_entries = 0
+    for r in eachrow(sp)
+        l = length(r)
+        stored_entries += l
+        min_entries = min(min_entries, l)
+        max_entries = max(max_entries, l)
+    end
+    # Print sparsity
+    sparsity_pct = round(
+        (n_rows(sp) * n_cols(sp) - stored_entries) / (n_rows(sp) * n_cols(sp)) * 100 * 1000
+    ) / 1000
+    println(iob, " - Sparsity: $(sparsity_pct)% ($(stored_entries) stored entries)")
+    # Print row stats
+    avg_entries = round(stored_entries / n_rows(sp) * 10) / 10
+    println(iob, " - Entries per row (min, max, avg): $(min_entries), $(max_entries), $(avg_entries)")
+    # Compute memory estimate
+    @assert n_rows(sp) * sizeof(eltype(sp.rows)) == sizeof(sp.rows)
+    bytes_used      = sizeof(sp.rows) + stored_entries * sizeof(Int)
+    bytes_allocated = sizeof(sp.rows) + HeapAllocator.heap_stats(sp.heap)[2]
+    print(iob,   " - Memory estimate: $(Base.format_bytes(bytes_used)) used, $(Base.format_bytes(bytes_allocated)) allocated")
+    write(io, seekstart(iob))
+    return
 end
 
 n_rows(sp::SparsityPattern) = sp.nrows
@@ -120,8 +153,18 @@ n_cols(sp::SparsityPattern) = sp.ncols
 
 @inline function add_entry!(sp::SparsityPattern, row::Int, col::Int)
     @boundscheck 1 <= row <= n_rows(sp) && 1 <= col <= n_cols(sp)
-    @inbounds insert_sorted!(sp.rows[row], col)
+    r = @inbounds sp.rows[row]
+    r = insert_sorted(r, col)
+    @inbounds sp.rows[row] = r
     return
+end
+
+@inline function insert_sorted(x::HeapAllocator.HeapVector{Int}, item::Int)
+    k = searchsortedfirst(x, item)
+    if k == length(x) + 1 || @inbounds(x[k]) != item
+        x = HeapAllocator.insert(x, k, item)
+    end
+    return x
 end
 
 eachrow(sp::SparsityPattern)           = sp.rows
@@ -420,8 +463,8 @@ function _condense_sparsity_pattern!(
 
     # New entries tracked separately and inserted after since it is not possible to modify
     # the datastructure while looping over it.
-    heap = Final.HeapAllocator.Heap()
-    sp′ = Dict{Int, Final.HeapAllocator.HeapVector{Int}}()
+    heap = HeapAllocator.Heap()
+    sp′ = Dict{Int, HeapAllocator.HeapVector{Int}}()
 
     for (row, colidxs) in pairs(eachrow(sp))
         row_coeffs = coefficients_for_dof(dofmapping, dofcoefficients, row)
@@ -436,14 +479,10 @@ function _condense_sparsity_pattern!(
                 else
                     # ... this column _is_ constrained, distribute to columns.
                     for (col′, _) in col_coeffs
-                        # insert_sorted!(get!(Vector{Int}, sp′, row), col′)
                         r = get(sp′, row) do
-                            Final.HeapAllocator.resize(
-                                Final.HeapAllocator.alloc_array(heap, Int, 8),
-                                0,
-                            )
+                            HeapAllocator.resize(HeapAllocator.alloc_array(heap, Int, 8), 0)
                         end
-                        r = Final.insert_sorted(r, col′)
+                        r = insert_sorted(r, col′)
                         sp′[row] = r
                     end
                 end
@@ -456,14 +495,10 @@ function _condense_sparsity_pattern!(
                     # ... this column is _not_ constrained, distribute to rows.
                     !keep_constrained && haskey(dofmapping, col) && continue
                     for (row′, _) in row_coeffs
-                        # insert_sorted!(get!(Vector{Int}, sp′, row′), col)
                         r = get(sp′, row′) do
-                            Final.HeapAllocator.resize(
-                                Final.HeapAllocator.alloc_array(heap, Int, 8),
-                                0,
-                            )
+                            HeapAllocator.resize(HeapAllocator.alloc_array(heap, Int, 8), 0)
                         end
-                        r = Final.insert_sorted(r, col)
+                        r = insert_sorted(r, col)
                         sp′[row′] = r
                     end
                 else
@@ -472,14 +507,10 @@ function _condense_sparsity_pattern!(
                         !keep_constrained && haskey(dofmapping, row′) && continue
                         for (col′, _) in col_coeffs
                             !keep_constrained && haskey(dofmapping, col′) && continue
-                            # insert_sorted!(get!(Vector{Int}, sp′, row′), col′)
                             r = get(sp′, row′) do
-                                Final.HeapAllocator.resize(
-                                    Final.HeapAllocator.alloc_array(heap, Int, 8),
-                                    0,
-                                )
+                                HeapAllocator.resize(HeapAllocator.alloc_array(heap, Int, 8), 0)
                             end
-                            r = Final.insert_sorted(r, col′)
+                            r = insert_sorted(r, col′)
                             sp′[row′] = r
                         end
                     end
@@ -490,13 +521,14 @@ function _condense_sparsity_pattern!(
 
     # Insert new entries into the sparsity pattern
     for (row, colidxs) in sp′
+        # TODO: Extract row here and just insert_sorted
         for col in colidxs
             add_entry!(sp, row, col)
         end
     end
 
     # Release the memory in the temporary heap
-    Final.HeapAllocator.free(heap)
+    HeapAllocator.free(heap)
 
     return sp
 end

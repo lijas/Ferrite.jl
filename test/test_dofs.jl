@@ -430,7 +430,7 @@ end
         return false
     end
     function is_stored(sparsity_pattern::SparsityPattern, i, j)
-        return findfirst(k -> k == j, sparsity_pattern.coldofs[i]) !== nothing
+        return findfirst(k -> k == j, sparsity_pattern.rows[i]) !== nothing
     end
 
     # Full coupling (default)
@@ -531,7 +531,7 @@ end
 
     sparsity_pattern = create_sparsity_pattern(dh; coupling = [true true; true false])
     K = create_matrix(sparsity_pattern)
-    KS = Symmetric(create_matrix(dh; symmetric=true, coupling = [true true; true false]))
+    KS = Symmetric(create_matrix(dh; #= symmetric=true, =# coupling = [true true; true false]))
     # Subdomain 1: u and p
     udofs = celldofs(dh, 1)[dof_range(sdh1, :u)]
     pdofs = celldofs(dh, 1)[dof_range(sdh1, :p)]

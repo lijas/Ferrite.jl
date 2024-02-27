@@ -122,6 +122,20 @@ function free(heap::Heap)
     return
 end
 
+function heap_stats(heap::Heap)
+    bytes_used = 0
+    bytes_allocated = 0
+    for heapidx in 1:length(heap.size_heaps)
+        isassigned(heap.size_heaps, heapidx) || continue
+        size_heap = heap.size_heaps[heapidx]
+        bytes_allocated += length(size_heap.pages) * Int(MALLOC_PAGE_SIZE)
+        for page in size_heap.pages
+            bytes_used += count(!, page.freelist) * page.blocksize
+        end
+    end
+    return bytes_used, bytes_allocated
+end
+
 function Base.show(io::IO, ::MIME"text/plain", heap::Heap)
     iob = IOBuffer()
     println(iob, "HeapAllocator.Heap with blockheaps:")
