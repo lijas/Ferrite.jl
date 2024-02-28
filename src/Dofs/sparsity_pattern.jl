@@ -258,9 +258,6 @@ function create_sparsity_pattern!(
     if coupling !== nothing
         coupling = _coupling_to_local_dof_coupling(dh, coupling)
     end
-    if cross_coupling !== nothing
-        cross_coupling = _coupling_to_local_dof_coupling(dh, cross_coupling)
-    end
     return _create_sparsity_pattern!(sp, dh, ch, keep_constrained, coupling, cross_coupling, topology)
 end
 
@@ -422,7 +419,7 @@ function _create_sparsity_pattern!(
         sp::AbstractSparsityPattern, dh::DofHandler, ch::Union{ConstraintHandler, Nothing},
         keep_constrained::Bool,
         coupling::Union{Vector{<:AbstractMatrix{Bool}}, Nothing},
-        cross_coupling::Union{Vector{<:AbstractMatrix{Bool}}, Nothing},
+        cross_coupling::Union{AbstractMatrix{Bool}, Nothing},
         topology,
     )
     # 1. Add all connections between dofs for every cell while filtering based
@@ -454,9 +451,9 @@ function _create_sparsity_pattern!(
         add_entry!(sp, d, d)
     end
     # 3. Add cross-element connections if requested
-    if cross_coupling !== nothing && any(any, cross_coupling)
+    if cross_coupling !== nothing && any(cross_coupling)
         @assert topology !== nothing
-       cross_element_coupling!(sp, dh, ch, topology, keep_constrained, cross_coupling)
+        cross_element_coupling!(sp, dh, ch, topology, keep_constrained, cross_coupling)
     end
     # 4. Insert entries necessary for handling affine constraints
     if ch !== nothing
@@ -558,16 +555,16 @@ function _add_cross_coupling(sp::SparsityPattern, coupling_sdh::Matrix{Bool}, do
     return
 end
 
-# TODO: ...
+# TODO: Expose to users?
 function cross_element_coupling!(
         sp::SparsityPattern, dh::DofHandler, ch::Union{ConstraintHandler, Nothing},
         topology::ExclusiveTopology, keep_constrained::Bool,
-        couplings::AbstractVector{<:AbstractMatrix{Bool}}, # TODO: expand this inside this method
+        cross_coupling::AbstractMatrix{Bool},
     )
-    fca = FaceCache(CellCache(dh, UpdateFlags(false, false, true)), Int[], ScalarWrapper(0))
-    fcb = FaceCache(CellCache(dh, UpdateFlags(false, false, true)), Int[], ScalarWrapper(0))
-    ic = InterfaceCache(fca, fcb, Int[])
-    for ic in InterfaceIterator(ic, dh.grid, topology)
+    couplings = _coupling_to_local_dof_coupling(dh, cross_coupling)
+    for ic in InterfaceIterator(dh, topology)
+        # TODO: This looks like it can be optimized for the common case where
+        #       the cells are in the same subdofhandler
         sdhs_idx = dh.cell_to_subdofhandler[cellid.([ic.a, ic.b])]
         sdhs = dh.subdofhandlers[sdhs_idx]
         for (i, sdh) in pairs(sdhs)
