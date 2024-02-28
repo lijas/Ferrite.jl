@@ -240,6 +240,8 @@ function create_sparsity_pattern!(
         sp::AbstractSparsityPattern, dh::DofHandler, ch::Union{ConstraintHandler, Nothing} = nothing;
         keep_constrained::Bool = true,
         coupling::Union{AbstractMatrix{Bool}, Nothing} = nothing,
+        cross_coupling::Union{AbstractMatrix{Bool}, Nothing} = nothing,
+        topology = nothing,
     )
     # Argument checking
     isclosed(dh) || error("the DofHandler must be closed")
@@ -256,7 +258,10 @@ function create_sparsity_pattern!(
     if coupling !== nothing
         coupling = _coupling_to_local_dof_coupling(dh, coupling)
     end
-    return _create_sparsity_pattern!(sp, dh, ch, keep_constrained, coupling)
+    if cross_coupling !== nothing
+        cross_coupling = _coupling_to_local_dof_coupling(dh, cross_coupling)
+    end
+    return _create_sparsity_pattern!(sp, dh, ch, keep_constrained, coupling, cross_coupling, topology)
 end
 
 """
@@ -417,6 +422,8 @@ function _create_sparsity_pattern!(
         sp::AbstractSparsityPattern, dh::DofHandler, ch::Union{ConstraintHandler, Nothing},
         keep_constrained::Bool,
         coupling::Union{Vector{<:AbstractMatrix{Bool}}, Nothing},
+        cross_coupling::Union{Vector{<:AbstractMatrix{Bool}}, Nothing},
+        topology,
     )
     # 1. Add all connections between dofs for every cell while filtering based
     #    on a) constraints, and b) field/dof coupling.
@@ -446,7 +453,12 @@ function _create_sparsity_pattern!(
     for d in 1:ndofs(dh)
         add_entry!(sp, d, d)
     end
-    # 3. Insert entries necessary for handling affine constraints
+    # 3. Add cross-element connections if requested
+    if cross_coupling !== nothing && any(any, cross_coupling)
+        @assert topology !== nothing
+       cross_element_coupling!(sp, dh, ch, topology, keep_constrained, cross_coupling)
+    end
+    # 4. Insert entries necessary for handling affine constraints
     if ch !== nothing
         condense_sparsity_pattern!(sp, ch; keep_constrained = keep_constrained)
     end
@@ -530,6 +542,58 @@ function _condense_sparsity_pattern!(
     # Release the memory in the temporary heap
     HeapAllocator.free(heap)
 
+    return sp
+end
+
+function _add_cross_coupling(sp::SparsityPattern, coupling_sdh::Matrix{Bool}, dof_i::Int, dof_j::Int,
+        cell_field_dofs::Union{Vector{Int}, SubArray}, neighbor_field_dofs::Union{Vector{Int}, SubArray},
+        i::Int, j::Int, keep_constrained::Bool, ch::Union{ConstraintHandler, Nothing})
+
+    coupling_sdh[dof_i, dof_j] || return
+    dofi = cell_field_dofs[i]
+    dofj = neighbor_field_dofs[j]
+    # sym && (dofj > dofi && return cnt)
+    !keep_constrained && (haskey(ch.dofmapping, dofi) || haskey(ch.dofmapping, dofj)) && return
+    add_entry!(sp, dofi, dofj)
+    return
+end
+
+# TODO: ...
+function cross_element_coupling!(
+        sp::SparsityPattern, dh::DofHandler, ch::Union{ConstraintHandler, Nothing},
+        topology::ExclusiveTopology, keep_constrained::Bool,
+        couplings::AbstractVector{<:AbstractMatrix{Bool}}, # TODO: expand this inside this method
+    )
+    fca = FaceCache(CellCache(dh, UpdateFlags(false, false, true)), Int[], ScalarWrapper(0))
+    fcb = FaceCache(CellCache(dh, UpdateFlags(false, false, true)), Int[], ScalarWrapper(0))
+    ic = InterfaceCache(fca, fcb, Int[])
+    for ic in InterfaceIterator(ic, dh.grid, topology)
+        sdhs_idx = dh.cell_to_subdofhandler[cellid.([ic.a, ic.b])]
+        sdhs = dh.subdofhandlers[sdhs_idx]
+        for (i, sdh) in pairs(sdhs)
+            sdh_idx = sdhs_idx[i]
+            coupling_sdh = couplings[sdh_idx]
+            for cell_field in sdh.field_names
+                dofrange1 = dof_range(sdh, cell_field)
+                cell_dofs = celldofs(sdh_idx == 1 ? ic.a : ic.b)
+                cell_field_dofs = @view cell_dofs[dofrange1]
+                for neighbor_field in sdh.field_names
+                    sdh2 = sdhs[i == 1 ? 2 : 1]
+                    neighbor_field ∈ sdh2.field_names || continue
+                    dofrange2 = dof_range(sdh2, neighbor_field)
+                    neighbor_dofs = celldofs(sdh_idx == 2 ? ic.a : ic.b)
+                    neighbor_field_dofs = @view neighbor_dofs[dofrange2]
+                    # Typical coupling procedure
+                    for (j, dof_j) in pairs(dofrange2), (i, dof_i) in pairs(dofrange1)
+                        # This line to avoid coupling the shared dof in continuous interpolations as cross-element. They're coupled in the local coupling matrix.
+                        (cell_field_dofs[i] ∈ neighbor_dofs || neighbor_field_dofs[j] ∈ cell_dofs) && continue
+                        _add_cross_coupling(sp, coupling_sdh, dof_i, dof_j, cell_field_dofs, neighbor_field_dofs, i, j, keep_constrained, ch)
+                        _add_cross_coupling(sp, coupling_sdh, dof_j, dof_i, neighbor_field_dofs, cell_field_dofs, j, i, keep_constrained, ch)
+                    end
+                end
+            end
+        end
+    end
     return sp
 end
 

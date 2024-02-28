@@ -37,7 +37,7 @@ include("test_utils.jl")
 # include("test_interfacevalues.jl");
 # include("test_quadrules.jl");
 # include("test_assemble.jl");
-# include("test_dofs.jl"); # TODO
+include("test_dofs.jl"); # TODO
 # include("test_constraints.jl");
 # include("test_grid_dofhandler_vtk.jl");
 # include("test_abstractgrid.jl");

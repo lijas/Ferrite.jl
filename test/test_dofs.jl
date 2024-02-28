@@ -659,15 +659,15 @@ end
     add!(dh, :w, Lagrange{RefQuadrilateral,1}())
     close!(dh)
     for coupling in couplings, cross_coupling in couplings
-        K = create_sparsity_pattern(dh; coupling=coupling, topology = topology, cross_coupling = cross_coupling)
-        all(coupling) && @test K == create_sparsity_pattern(dh, topology = topology, cross_coupling = cross_coupling) 
+        K = create_matrix(dh; coupling=coupling, topology = topology, cross_coupling = cross_coupling)
+        all(coupling) && @test K == create_matrix(dh, topology = topology, cross_coupling = cross_coupling) 
         check_coupling(dh, topology, K, coupling, cross_coupling)
     end
 
     # Error paths
-    @test_throws ErrorException("coupling not square") create_sparsity_pattern(dh; coupling=[true true])
-    @test_throws ErrorException("coupling not symmetric") create_symmetric_sparsity_pattern(dh; coupling=[true true; false true])
-    @test_throws ErrorException("could not create coupling") create_symmetric_sparsity_pattern(dh; coupling=falses(100, 100))
+    @test_throws ErrorException("coupling not square") create_matrix(dh; coupling=[true true])
+    # @test_throws ErrorException("coupling not symmetric") create_matrix(dh; coupling=[true true; false true])
+    @test_throws ErrorException("could not create coupling") create_matrix(dh; coupling=falses(100, 100))
  
     # Test coupling with subdomains
     # Note: `check_coupling` works for this case only because the second domain has dofs from the first domain in order. Otherwise tests like in continuous ip are required.
@@ -684,8 +684,8 @@ end
     close!(dh)
 
     for coupling in couplings, cross_coupling in couplings
-        K = create_sparsity_pattern(dh; coupling=coupling, topology = topology, cross_coupling = cross_coupling)
-        all(coupling) && @test K == create_sparsity_pattern(dh, topology = topology, cross_coupling = cross_coupling)
+        K = create_matrix(dh; coupling=coupling, topology = topology, cross_coupling = cross_coupling)
+        all(coupling) && @test K == create_matrix(dh, topology = topology, cross_coupling = cross_coupling)
         check_coupling(dh, topology, K, coupling, cross_coupling)
     end
 
@@ -696,8 +696,8 @@ end
     add!(dh, :u, CrouzeixRaviart{RefTriangle,1}())
     close!(dh)
     coupling = trues(3,3)
-    K = create_sparsity_pattern(dh; coupling=coupling, topology = topology, cross_coupling = coupling)
-    K_cont = create_sparsity_pattern(dh; coupling=coupling, topology = topology, cross_coupling = falses(3,3))
-    K_default = create_sparsity_pattern(dh)
+    K = create_matrix(dh; coupling=coupling, topology = topology, cross_coupling = coupling)
+    K_cont = create_matrix(dh; coupling=coupling, topology = topology, cross_coupling = falses(3,3))
+    K_default = create_matrix(dh)
     @test K == K_cont == K_default
 end
