@@ -127,15 +127,4 @@ include("PointEvalHandler.jl")
 include("deprecations.jl")
 include("docs.jl")
 
-# include("heap.jl")
-# include("dsp.jl")
-# include("pooldsp.jl")
-# include("pooldsp2.jl")
-# include("pooldsp3.jl")
-# include("final-countdown.jl")
-# include("ptrfreelist.jl")
-# include("mimallocdsp.jl")
-# include("spzerosdsp.jl")
-# include("final_FINAL_v2.jl")
-
 end # module
