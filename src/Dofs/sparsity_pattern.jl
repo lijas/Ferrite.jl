@@ -555,7 +555,15 @@ function _add_cross_coupling(sp::SparsityPattern, coupling_sdh::Matrix{Bool}, do
     return
 end
 
-# TODO: Expose to users?
+"""
+    cross_element_coupling!(
+        sp::SparsityPattern, dh::DofHandler, ch::Union{ConstraintHandler, Nothing},
+        topology::ExclusiveTopology, keep_constrained::Bool,
+        cross_coupling::AbstractMatrix{Bool},
+    )
+
+TODO: Expose to users?
+"""
 function cross_element_coupling!(
         sp::SparsityPattern, dh::DofHandler, ch::Union{ConstraintHandler, Nothing},
         topology::ExclusiveTopology, keep_constrained::Bool,
