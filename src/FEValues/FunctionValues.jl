@@ -23,11 +23,17 @@ typeof_d2Ndξ2(::Type{T}, ::VectorInterpolation{dim}, ::VectorizedInterpolation{
 typeof_N(   ::Type{T}, ::ScalarInterpolation, ::VectorizedInterpolation{sdim, <: AbstractRefShape{rdim}}) where {T, sdim, rdim} = T
 typeof_dNdx(::Type{T}, ::ScalarInterpolation, ::VectorizedInterpolation{sdim, <: AbstractRefShape{rdim}}) where {T, sdim, rdim} = SVector{sdim, T}
 typeof_dNdξ(::Type{T}, ::ScalarInterpolation, ::VectorizedInterpolation{sdim, <: AbstractRefShape{rdim}}) where {T, sdim, rdim} = SVector{rdim, T}
+typeof_d2Ndx2(::Type{T}, ::ScalarInterpolation, ::VectorizedInterpolation{sdim, <: AbstractRefShape{rdim}}) where {T, sdim, rdim} = SMatrix{sdim, sdim, T}
+typeof_d2Ndξ2(::Type{T}, ::ScalarInterpolation, ::VectorizedInterpolation{sdim, <: AbstractRefShape{rdim}}) where {T, sdim, rdim} = SMatrix{rdim, rdim, T}
+
 
 # Vector, vdim != sdim != rdim (TODO: Use Vec/Tensor if (s|r)dim <= 3?)
 typeof_N(   ::Type{T}, ::VectorInterpolation{vdim}, ::VectorizedInterpolation{sdim, <: AbstractRefShape{rdim}}) where {T, vdim, sdim, rdim} = SVector{vdim, T}
 typeof_dNdx(::Type{T}, ::VectorInterpolation{vdim}, ::VectorizedInterpolation{sdim, <: AbstractRefShape{rdim}}) where {T, vdim, sdim, rdim} = SMatrix{vdim, sdim, T}
 typeof_dNdξ(::Type{T}, ::VectorInterpolation{vdim}, ::VectorizedInterpolation{sdim, <: AbstractRefShape{rdim}}) where {T, vdim, sdim, rdim} = SMatrix{vdim, rdim, T}
+typeof_d2Ndx2(::Type{T}, ::VectorInterpolation{vdim}, ::VectorizedInterpolation{sdim, <: AbstractRefShape{rdim}}) where {T, vdim, sdim, rdim} = SArray{Tuple{vdim, sdim, sdim}, T}
+typeof_d2Ndξ2(::Type{T}, ::VectorInterpolation{vdim}, ::VectorizedInterpolation{sdim, <: AbstractRefShape{rdim}}) where {T, vdim, sdim, rdim} = SArray{Tuple{vdim, rdim, rdim}, T}
+
 
 """
     FunctionValues{DiffOrder}(::Type{T}, ip_fun, qr::QuadratureRule, ip_geo::VectorizedInterpolation)
@@ -56,6 +62,10 @@ struct FunctionValues{DiffOrder, IP, N_t, dNdx_t, dNdξ_t, d2Ndx2_t, d2Ndξ2_t}
     end
 end
 function FunctionValues{DiffOrder}(::Type{T}, ip::Interpolation, qr::QuadratureRule, ip_geo::VectorizedInterpolation) where {DiffOrder, T}
+    sdim = n_components(ip_geo)
+    rdim = getdim(ip_geo)
+    (DiffOrder > 1 && (rdim != sdim)) && error("Higher order gradient for embedded elements not implemented")
+
     n_shape = getnbasefunctions(ip)
     n_qpoints = getnquadpoints(qr)
     
@@ -77,7 +87,7 @@ function FunctionValues{DiffOrder}(::Type{T}, ip::Interpolation, qr::QuadratureR
         throw(ArgumentError("Currently only values and gradients can be updated in FunctionValues"))
     end
 
-    fv = FunctionValues(ip, Nx, Nξ, dNdx, dNdξ, d2Ndξ2, d2Ndx2)
+    fv = FunctionValues(ip, Nx, Nξ, dNdx, dNdξ, d2Ndx2, d2Ndξ2)
     precompute_values!(fv, getpoints(qr)) # Separate function for qr point update in PointValues
     return fv
 end
@@ -196,7 +206,13 @@ end
     H    = gethessian(mapping_values)
     @inbounds for j in 1:getnbasefunctions(funvals)
         dNdx = dothelper(funvals.dNdξ[j, q_point], Jinv)
-        d2Ndx2 = Jinv'⋅funvals.d2Ndξ2[j, q_point]⋅Jinv - Jinv'⋅(dNdx⋅H)⋅Jinv
+        
+        is_vector_valued = first(funvals.Nx) isa Vec
+        if is_vector_valued #TODO - combine with helper function ? 
+            d2Ndx2 = (funvals.d2Ndξ2[j, q_point] - dNdx⋅H) ⊡ otimesu(Jinv,Jinv)
+        else
+            d2Ndx2 = Jinv'⋅(funvals.d2Ndξ2[j, q_point] - dNdx⋅H)⋅Jinv
+        end
 
         funvals.dNdx[j, q_point]   = dNdx
         funvals.d2Ndx2[j, q_point] = d2Ndx2
