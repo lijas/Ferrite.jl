@@ -1841,3 +1841,126 @@ function add!(ch::ConstraintHandler, c::RigidConnector)
 
     return
 end
+
+function euler_to_rotation_matrix(euler_angles::Vector)
+    yaw, pitch, roll = euler_angles
+    # Compute individual rotation matrices
+    R_yaw = [
+        cos(yaw)  -sin(yaw)   0;
+        sin(yaw)   cos(yaw)   0;
+        0          0          1
+    ]
+    
+    R_pitch = [
+        cos(pitch)   0   sin(pitch);
+        0            1   0;
+       -sin(pitch)   0   cos(pitch)
+    ]
+    
+    R_roll = [
+        1    0          0;
+        0    cos(roll)  -sin(roll);
+        0    sin(roll)   cos(roll)
+    ]
+    
+    # Combine rotations (Z-Y-X convention)
+    R = R_yaw * R_pitch * R_roll
+    return R
+end
+
+function euler_parameters_to_rotation_matrix(ep)
+    q0, q1, q2, q3 = ep
+    # Compute the elements of the rotation matrix
+    R = [
+        1 - 2*(q2^2 + q3^2)   2*(q1*q2 - q0*q3)   2*(q1*q3 + q0*q2);
+        2*(q1*q2 + q0*q3)     1 - 2*(q1^2 + q3^2) 2*(q2*q3 - q0*q1);
+        2*(q1*q3 - q0*q2)     2*(q2*q3 + q0*q1)   1 - 2*(q1^2 + q2^2)
+    ]
+    return R
+end
+
+
+function constraint(q, ubar)
+
+    r = q[1:3]
+    euler_angles = q[4:6]
+    A = euler_to_rotation_matrix(euler_angles)
+    #euler_angles = q[4:7]
+    #A = euler_parameters_to_rotation_matrix(euler_angles)
+
+    return (r + A*ubar)
+end
+
+
+function add!(ch::ConstraintHandler{DH,Float64}, c::RigidConnector) where DH <: DofHandler{3}
+    (; dh) = ch
+    grid = get_grid(dh)
+    dim = getspatialdim(grid)
+
+    rb_dofs = celldofs(dh, c.rigidbody_cellid)
+
+    _check_same_celltype(grid, c.facets)
+    @assert getcells(grid, c.rigidbody_cellid) isa Point
+    r = getcoordinates(grid, c.rigidbody_cellid)[1]
+
+    cellid = first(c.facets)[1]
+    sdh_index = dh.cell_to_subdofhandler[cellid]
+    sdh = dh.subdofhandlers[sdh_index]
+
+    field_idx = find_field(sdh, :u) #Hardcoded
+    CT = getcelltype(sdh)
+    ip = getfieldinterpolation(sdh, field_idx)
+    ip_geo = geometric_interpolation(CT)
+    offset = field_offset(sdh, field_idx)
+    n_comp = n_dbc_components(ip)
+
+    local_facet_dofs, local_facet_dofs_offset =
+        _local_facet_dofs_for_bc(ip.ip, n_comp, 1:n_comp, offset)
+
+    dofsadded = Set{Int}()
+    fv = BCValues(ip.ip, ip_geo)
+
+    cc = CellCache(dh, UpdateFlags(; nodes = false, coords = true, dofs = true))
+    for (cellidx, entityidx) in c.facets
+        reinit!(cc, cellidx)
+
+        # no need to reinit!, enough to update current_entity since we only need geometric shape functions M
+        fv.current_entity = entityidx
+
+        # local dof-range for this facet
+        erange = local_facet_dofs_offset[entityidx]:(local_facet_dofs_offset[entityidx + 1] - 1)
+        dofs = cc.dofs
+        #dofs[1] in dofsadded && continue
+
+        c = 0
+        for ipoint in getnquadpoints(fv)
+            x = spatial_coordinate(fv, ipoint, cc.coords)
+
+            # r + A*ū == x
+            ū = x - r
+            #ū = Vec((1.0,0.0,0.0))
+            q = zeros(7)
+            #q[1:3] .= x
+            #q[4:6] .= r
+            #q[7] = 1.0
+            #g = constraint(q, ū)
+            C = ForwardDiff.jacobian(q -> constraint(q, ū), q)
+            #@show C
+            #@show rb_dofs x r ip_geo, g
+            #uperp = rotate(ū, pi / 2)
+
+            for d in 1:dim
+                c += 1
+                globaldof = cc.dofs[local_facet_dofs[erange[c]]]
+                if globaldof in dofsadded
+                    break;
+                end
+                a1 = AffineConstraint(globaldof, [rb_dofs[i] => C[d,i] for i in 1:length(rb_dofs)], 0.0)
+                add!(ch, a1)
+                push!(dofsadded, globaldof)
+            end
+        end
+    end
+
+    return
+end
