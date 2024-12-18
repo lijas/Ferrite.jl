@@ -1807,7 +1807,7 @@ function add!(ch::ConstraintHandler, c::RigidConnector)
         _local_facet_dofs_for_bc(ip.ip, n_comp, 1:n_comp, offset)
 
     dofsadded = Set{Int}()
-    fv = BCValues(ip.ip, ip_geo)
+    fv = BCValues(ip.ip, ip_geo, FacetIndex)
 
     cc = CellCache(dh, UpdateFlags(; nodes = false, coords = true, dofs = true))
     for (cellidx, entityidx) in c.facets
@@ -1822,7 +1822,7 @@ function add!(ch::ConstraintHandler, c::RigidConnector)
         #dofs[1] in dofsadded && continue
 
         c = 0
-        for ipoint in getnquadpoints(fv)
+        for ipoint in 1:getnquadpoints(fv)
             x = spatial_coordinate(fv, ipoint, cc.coords)
 
             # r + A*ū == x

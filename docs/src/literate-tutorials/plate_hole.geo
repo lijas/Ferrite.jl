@@ -35,7 +35,8 @@ Curve Loop(2) = {5, 6, 7, 8};
 Plane Surface(1) = {1, 2};
 
 // Define physical groups for boundary conditions
-Physical Curve("PlateRightLeft") = {2, 4};
+Physical Curve("PlateRight") = {2};
+Physical Curve("PlateLeft") = {4};
 Physical Curve("PlateExterior") = {1, 2, 3, 4};
 Physical Curve("HoleInterior") = {5, 6, 7, 8};
 Physical Surface("PlateWithHole") = {1};
